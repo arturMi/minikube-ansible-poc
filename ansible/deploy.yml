@@ -1,0 +1,132 @@
+---
+# Builds the app image with Docker, loads it into Minikube and deploys it with kubectl.
+#
+#   make deploy                          (= ansible-playbook ansible/deploy.yml)
+#   make deploy VERSION=1.1.0 REPLICAS=5
+#
+# All settings live in ansible/group_vars/all.yml
+
+- name: Deploy hello-app to Minikube
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    image: "{{ app_name }}:{{ app_version }}"
+    kubectl: "kubectl --context={{ k8s_context }} --namespace={{ k8s_namespace }}"
+    project_dir: "{{ playbook_dir | dirname }}"
+
+    # Runs inside the cluster: calls the Service 20 times and reports which pods answered
+    smoke_test_script: |
+      import json, urllib.request
+      pods, versions = set(), set()
+      for _ in range(20):
+          with urllib.request.urlopen("http://{{ app_name }}/api/info", timeout=5) as response:
+              info = json.load(response)
+          pods.add(info["pod"])
+          versions.add(info["version"])
+      print(f"OK: {len(pods)} pods answered ({', '.join(sorted(pods))}), version {', '.join(sorted(versions))}")
+
+  tasks:
+    # --- 1. Preflight: are all tools installed? -----------------------------------------
+    - name: Check that Docker, Minikube and kubectl work
+      ansible.builtin.command:
+        cmd: "{{ item.cmd }}"
+      loop:
+        - cmd: docker info
+          hint: "Install Docker and make sure it is running (on Linux, also add your user to the 'docker' group)."
+        - cmd: minikube version
+          hint: "Install Minikube: https://minikube.sigs.k8s.io/docs/start/"
+        - cmd: kubectl version --client
+          hint: "Install kubectl: https://kubernetes.io/docs/tasks/tools/"
+      loop_control:
+        label: "{{ item.cmd }}"
+      register: preflight
+      changed_when: false
+      failed_when: false
+
+    - name: Stop with a helpful message if something is missing
+      ansible.builtin.fail:
+        msg: "'{{ item.item.cmd }}' failed. {{ item.item.hint }}"
+      loop: "{{ preflight.results }}"
+      loop_control:
+        label: "{{ item.item.cmd }}"
+      when: item.rc != 0
+
+    # --- 2. Minikube: start the local Kubernetes cluster if needed ----------------------
+    - name: Check whether Minikube is running
+      ansible.builtin.command:
+        cmd: minikube status
+      register: minikube_status
+      changed_when: false
+      failed_when: false
+
+    - name: Start Minikube (the first start downloads Kubernetes and takes a few minutes)
+      ansible.builtin.command:
+        cmd: minikube start --driver=docker
+      when: minikube_status.rc != 0
+      changed_when: true
+
+    # --- 3. Docker: build the image and hand it to Minikube -----------------------------
+    - name: Build the Docker image {{ image }}
+      ansible.builtin.command:
+        cmd: docker build --tag {{ image }} app
+        chdir: "{{ project_dir }}"
+      changed_when: true
+
+    - name: Load the image into Minikube (so no image registry is needed)
+      ansible.builtin.command:
+        cmd: minikube image load {{ image }}
+      changed_when: true
+
+    # --- 4. Kubernetes: apply the manifests and wait until the pods are ready -----------
+    - name: Apply the Kubernetes manifests from k8s/
+      ansible.builtin.command:
+        cmd: "{{ kubectl }} apply --filename=-"
+        stdin: "{{ lookup('ansible.builtin.template', project_dir ~ '/k8s/' ~ item) }}"
+      loop:
+        - namespace.yaml.j2
+        - deployment.yaml.j2
+        - service.yaml.j2
+      register: kubectl_apply
+      changed_when: "'unchanged' not in kubectl_apply.stdout"
+
+    - name: Wait until all pods of the new version are ready
+      ansible.builtin.command:
+        cmd: "{{ kubectl }} rollout status deployment/{{ app_name }} --timeout=180s"
+      changed_when: false
+
+    # --- 5. Smoke test: call the app through its Service, from inside the cluster -------
+    - name: Remove a leftover smoke-test pod (from an interrupted earlier run)
+      ansible.builtin.command:
+        cmd: "{{ kubectl }} delete pod smoke-test --ignore-not-found"
+      register: smoke_test_cleanup
+      changed_when: smoke_test_cleanup.stdout | length > 0
+
+    - name: Smoke test – send 20 requests to the Service
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - --context={{ k8s_context }}
+          - --namespace={{ k8s_namespace }}
+          - run
+          - smoke-test
+          - --image={{ image }}
+          - --image-pull-policy=Never
+          - --restart=Never
+          - --rm
+          - --attach
+          - --quiet
+          - --command
+          - --
+          - python
+          - -c
+          - "{{ smoke_test_script }}"
+      register: smoke_test
+      changed_when: false
+
+    - name: Show the result
+      ansible.builtin.debug:
+        msg:
+          - "{{ smoke_test.stdout_lines | select('match', 'OK:') | first | default(smoke_test.stdout) }}"
+          - "hello-app {{ app_version }} is running with {{ app_replicas }} pods in namespace '{{ k8s_namespace }}'."
+          - "Open it in your browser:  make open   (or: minikube service {{ app_name }} -n {{ k8s_namespace }})"

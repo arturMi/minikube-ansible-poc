@@ -1,0 +1,27 @@
+---
+# Removes everything deploy.yml created. Minikube itself keeps running:
+# stop it with `make stop`, or delete the whole cluster with `minikube delete`.
+
+- name: Remove hello-app from Minikube
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Check whether Minikube is running
+      ansible.builtin.command:
+        cmd: minikube status
+      register: minikube_status
+      changed_when: false
+      failed_when: false
+
+    - name: Delete the namespace (this removes the Deployment, the Service and all pods)
+      ansible.builtin.command:
+        cmd: kubectl --context={{ k8s_context }} delete namespace {{ k8s_namespace }} --ignore-not-found
+      register: delete_namespace
+      changed_when: delete_namespace.stdout | length > 0
+      when: minikube_status.rc == 0
+
+    - name: Nothing to delete while Minikube is stopped
+      ansible.builtin.debug:
+        msg: "Minikube is not running. Start it with 'minikube start' and run this again, or remove everything with 'minikube delete'."
+      when: minikube_status.rc != 0

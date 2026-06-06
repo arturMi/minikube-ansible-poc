@@ -1,0 +1,5 @@
+# Everything of the demo lives in its own namespace, so `make destroy` can remove it in one go.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ k8s_namespace }}

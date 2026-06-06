@@ -1,0 +1,42 @@
+---
+# Runs the whole demo on GitHub's servers on every push:
+# unit tests -> make deploy (fresh Minikube) -> rolling update -> make destroy.
+# GitHub's Ubuntu runners come with Docker, Minikube and kubectl preinstalled.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  minikube:
+    name: Deploy to Minikube
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ANSIBLE_FORCE_COLOR: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install Ansible and the test tools
+        run: pip install ansible-core pytest -r app/requirements.txt
+
+      - name: Unit tests
+        run: make test
+
+      - name: Deploy (exactly what you run locally)
+        run: make deploy
+
+      - name: Show what is running
+        run: make status
+
+      - name: Roll out a new version
+        run: make deploy VERSION=1.1.0
+
+      - name: Clean up
+        run: make destroy

@@ -1,0 +1,48 @@
+# Runs several copies (pods) of the app and replaces them one by one when the version changes.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ app_name }}
+  namespace: {{ k8s_namespace }}
+  labels:
+    app: {{ app_name }}
+spec:
+  replicas: {{ app_replicas }}
+  selector:
+    matchLabels:
+      app: {{ app_name }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1          # during an update, start at most 1 extra pod ...
+      maxUnavailable: 0    # ... and never go below the desired number of ready pods
+  template:
+    metadata:
+      labels:
+        app: {{ app_name }}
+    spec:
+      containers:
+        - name: {{ app_name }}
+          image: {{ app_name }}:{{ app_version }}
+          imagePullPolicy: Never   # use the image loaded with `minikube image load`, never a registry
+          ports:
+            - containerPort: 8000
+          env:
+            - name: APP_VERSION
+              value: "{{ app_version }}"
+          readinessProbe:          # the pod only gets traffic once this check succeeds
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 5
+          livenessProbe:           # Kubernetes restarts the container if this keeps failing
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

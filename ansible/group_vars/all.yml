@@ -1,0 +1,12 @@
+---
+# All settings of the demo in one place.
+# Override them on the command line, e.g.   make deploy VERSION=1.1.0 REPLICAS=5
+# (which runs: ansible-playbook ansible/deploy.yml -e app_version=1.1.0 -e app_replicas=5)
+
+app_name: hello-app
+app_version: "1.0.0"     # image tag – deploy a new number to roll out a new version
+app_replicas: 3          # how many pods run the app
+
+k8s_namespace: demo      # Kubernetes namespace everything is created in
+k8s_context: minikube    # kubectl context – makes sure we never touch another cluster
+k8s_node_port: 30080     # fixed port on the Minikube node
